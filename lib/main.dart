@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'dart:math';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:speech_to_text/speech_to_text.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 const _apiKey = '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';
 const _orModel = 'google/gemini-2.0-flash-001';
@@ -54,6 +56,11 @@ class Storage {
 
   static Future<void> setStats(Map<String, String?> stats) async =>
       (await _prefs).setString('financial_stats', jsonEncode(stats));
+
+  static Future<bool> getScreenshotProtection() async =>
+      (await _prefs).getBool('screenshot_protection') ?? false;
+  static Future<void> setScreenshotProtection(bool v) async =>
+      (await _prefs).setBool('screenshot_protection', v);
 
   static Future<List<String>> getConvIds() async {
     final raw = (await _prefs).getString('conv_ids');
@@ -613,11 +620,15 @@ class MainPage extends StatefulWidget {
 class _MainPageState extends State<MainPage> {
   List<ConvMeta> _conversations = [];
   String? _currentId;
+  bool _screenshotProtected = false;
+
+  static const _screenshotChannel = MethodChannel('com.example.chatbot/screenshot');
 
   @override
   void initState() {
     super.initState();
     _loadConversations();
+    _loadScreenshotPref();
   }
 
   Future<void> _loadConversations() async {
@@ -715,6 +726,127 @@ class _MainPageState extends State<MainPage> {
     setState(() { _conversations = []; _currentId = null; });
   }
 
+  Future<void> _loadScreenshotPref() async {
+    final protected = await Storage.getScreenshotProtection();
+    if (!mounted) return;
+    setState(() => _screenshotProtected = protected);
+    await _applyScreenshotProtection(protected);
+  }
+
+  Future<void> _applyScreenshotProtection(bool protect) async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _screenshotChannel.invokeMethod(protect ? 'enable' : 'disable');
+    } catch (_) {}
+  }
+
+  Future<void> _handleScreenshotToggle(bool protect) async {
+    await Storage.setScreenshotProtection(protect);
+    if (!mounted) return;
+    setState(() => _screenshotProtected = protect);
+    await _applyScreenshotProtection(protect);
+  }
+
+  void _showPrivacyAndAbout() {
+    const sectionStyle = TextStyle(
+      color: _text3, fontSize: 10.5, fontWeight: FontWeight.w600, letterSpacing: 1.5,
+    );
+    const commands = [
+      ('"adımı [isim] yap"', 'İsminizi değiştirir'),
+      ('"hafızamı sil"', 'Öğrenilen bilgileri temizler'),
+      ('"tüm sohbetleri sil"', 'Sohbet geçmişini temizler'),
+      ('"ekran görüntüsü korumasını aç"', 'Ekran alıntısını engeller'),
+      ('"ekran görüntüsü korumasını kapat"', 'Ekran alıntısına izin verir'),
+      ('"çıkış yap"', 'Uygulamadan çıkar'),
+    ];
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.shield_outlined, color: _gold, size: 20),
+            SizedBox(width: 8),
+            Text('Gizlilik ve Hakkımda'),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('GİZLİLİK', style: sectionStyle),
+              const SizedBox(height: 6),
+              const Text(
+                'Tüm verileriniz yalnızca bu cihazda saklanır. '
+                'Sohbet geçmişi, hafıza ve finansal bilgileriniz '
+                'hiçbir harici sunucuya gönderilmez.',
+              ),
+              const SizedBox(height: 16),
+              Container(height: 1, color: _border),
+              const SizedBox(height: 16),
+              const Text('HAKKINDA', style: sectionStyle),
+              const SizedBox(height: 6),
+              const Text(
+                'Finans Asistanı — v0.1.0\n'
+                'Kişisel yapay zeka destekli finansal danışmanınız.\n'
+                'OpenRouter · Gemini 2.0 Flash',
+              ),
+              const SizedBox(height: 16),
+              Container(height: 1, color: _border),
+              const SizedBox(height: 16),
+              const Text('CHATBOT KOMUTLARI', style: sectionStyle),
+              const SizedBox(height: 6),
+              const Text(
+                'Asistana yazarak aşağıdaki ayarları değiştirebilirsiniz:',
+                style: TextStyle(color: _textMid, fontSize: 12.5),
+              ),
+              const SizedBox(height: 10),
+              ...commands.map(
+                (e) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 5, height: 5,
+                        margin: const EdgeInsets.only(top: 5),
+                        decoration: const BoxDecoration(shape: BoxShape.circle, color: _gold),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: RichText(
+                          text: TextSpan(
+                            style: const TextStyle(fontSize: 13, height: 1.4),
+                            children: [
+                              TextSpan(
+                                text: '${e.$1}  ',
+                                style: const TextStyle(color: _textHi, fontWeight: FontWeight.w500),
+                              ),
+                              TextSpan(
+                                text: e.$2,
+                                style: const TextStyle(color: _textMid),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Kapat'),
+          ),
+        ],
+      ),
+    );
+  }
+
   String get _initials {
     final parts = widget.userName.trim().split(' ');
     if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
@@ -788,8 +920,10 @@ class _MainPageState extends State<MainPage> {
         key: ValueKey(_currentId),
         userName: widget.userName,
         conversationId: _currentId,
+        screenshotProtected: _screenshotProtected,
         onConvCreated: _onConvCreated,
         onTitleUpdated: _onTitleUpdated,
+        onScreenshotToggle: _handleScreenshotToggle,
         onLogout: _handleLogout,
         onRename: _handleRename,
         onClearAll: _handleClearAll,
@@ -995,6 +1129,32 @@ class _MainPageState extends State<MainPage> {
                       },
                     ),
             ),
+            Container(
+              decoration: const BoxDecoration(
+                border: Border(top: BorderSide(color: _borderSoft)),
+              ),
+              child: InkWell(
+                onTap: () {
+                  Navigator.pop(context);
+                  _showPrivacyAndAbout();
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.shield_outlined, color: _textMid, size: 18),
+                      const SizedBox(width: 12),
+                      const Text(
+                        'Gizlilik ve Hakkımda',
+                        style: TextStyle(color: _textMid, fontSize: 13.5),
+                      ),
+                      const Spacer(),
+                      const Icon(Icons.chevron_right, color: _text3, size: 16),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -1007,8 +1167,10 @@ class _MainPageState extends State<MainPage> {
 class ChatArea extends StatefulWidget {
   final String userName;
   final String? conversationId;
+  final bool screenshotProtected;
   final void Function(String id, String title) onConvCreated;
   final void Function(String id, String title)? onTitleUpdated;
+  final void Function(bool)? onScreenshotToggle;
   final VoidCallback? onLogout;
   final void Function(String newName)? onRename;
   final VoidCallback? onClearAll;
@@ -1017,8 +1179,10 @@ class ChatArea extends StatefulWidget {
     super.key,
     required this.userName,
     required this.conversationId,
+    this.screenshotProtected = false,
     required this.onConvCreated,
     this.onTitleUpdated,
+    this.onScreenshotToggle,
     this.onLogout,
     this.onRename,
     this.onClearAll,
@@ -1082,12 +1246,17 @@ Görevin:
 - Finansal kararlar için somut, uygulanabilir öneriler sun.
 - Gerektiğinde daha fazla bilgi iste (gelir, gider, hedef vb.).
 
+Mevcut ayarlar:
+- Ekran görüntüsü koruması: ${widget.screenshotProtected ? 'aktif ✓' : 'pasif ✗'}
+
 Sistem işlemleri:
 Kullanıcı aşağıdaki işlemleri açıkça isterse, yanıtının EN SONUNA (başka hiçbir yere değil) ilgili etiketi ekle:
 - Adını değiştirmek isterse (örn. "adımı X yap", "ismimi X olarak değiştir") → [ACTION:rename:YeniAd]
 - Hafızayı sıfırlamak isterse (örn. "hafızamı sil", "beni unut") → [ACTION:clear_memory]
 - Tüm sohbetleri silmek isterse → [ACTION:clear_all]
 - Çıkış yapmak isterse (örn. "çıkış yap", "hesabı sıfırla") → [ACTION:logout]
+- Ekran görüntüsü korumasını açmak isterse → [ACTION:screenshot_on]
+- Ekran görüntüsü korumasını kapatmak isterse → [ACTION:screenshot_off]
 Etiketleri kullanıcıya gösterme, sadece sistem okur. Onay almadan işlem yapma — önce onayla, sonra etiketi ekle.
 ''';
 
@@ -1290,6 +1459,10 @@ Etiketleri kullanıcıya gösterme, sadece sistem okur. Onay almadan işlem yapm
         await Storage.setUserName(newName);
         widget.onRename?.call(newName);
       }
+    } else if (action == 'screenshot_on') {
+      widget.onScreenshotToggle?.call(true);
+    } else if (action == 'screenshot_off') {
+      widget.onScreenshotToggle?.call(false);
     }
   }
 
@@ -1735,9 +1908,28 @@ class _MessageBubble extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SelectableText(
-                    message.text,
-                    style: const TextStyle(color: _textHi, fontSize: 14.5, height: 1.6),
+                  MarkdownBody(
+                    data: message.text,
+                    selectable: true,
+                    styleSheet: MarkdownStyleSheet(
+                      p: const TextStyle(color: _textHi, fontSize: 14.5, height: 1.6),
+                      strong: const TextStyle(color: _textHi, fontSize: 14.5, fontWeight: FontWeight.bold),
+                      em: const TextStyle(color: _textHi, fontSize: 14.5, fontStyle: FontStyle.italic),
+                      h1: const TextStyle(color: _textHi, fontSize: 20, fontWeight: FontWeight.bold, height: 1.4),
+                      h2: const TextStyle(color: _textHi, fontSize: 17.5, fontWeight: FontWeight.bold, height: 1.4),
+                      h3: const TextStyle(color: _textHi, fontSize: 15.5, fontWeight: FontWeight.w600, height: 1.4),
+                      code: const TextStyle(color: _gold, fontSize: 13, fontFamily: 'monospace'),
+                      codeblockDecoration: BoxDecoration(
+                        color: Color(0xFF1A1A2E),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: _border),
+                      ),
+                      blockquoteDecoration: const BoxDecoration(
+                        border: Border(left: BorderSide(color: _gold, width: 3)),
+                        color: Color(0x11D4AF37),
+                      ),
+                      listBullet: const TextStyle(color: _gold, fontSize: 14.5),
+                    ),
                   ),
                   if (message.time.isNotEmpty) ...[
                     const SizedBox(height: 4),
